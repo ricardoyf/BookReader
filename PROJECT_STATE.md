@@ -1,43 +1,27 @@
-# Estado del proyecto
+# BookReader v2 — estado de trabajo
 
-- Fuente funcional auditada:
-  `/home/n95/gDrive/gitHub/BookReaderTranslator`.
-- Base Android madura:
-  `/home/n95/gDrive/gitHub/gitHub TTS Reader`.
-- Proyecto final:
-  `/home/n95/gDrive/gitHub/BookReader`.
-- Objetivo: lector Android tipo Kindle para TXT, Markdown y PDF, sin ninguna
-  función ni referencia de traducción.
-- Estado: V1 terminada, compilada y auditada estáticamente; no había un
-  dispositivo Android conectado para prueba física.
+Objetivo cerrado: entregar una APK v2 que conserve las funciones de la v1 y añada lectura sin desplazamiento vertical, navegación página a página en TXT, Markdown y PDF, post-it persistente por página, modo de repaso de páginas marcadas y exportación PDF con el libro y número de página original.
 
 ## Criterios de cierre
 
-- Biblioteca navegable por carpetas y subcarpetas mediante SAF.
-- Lectura de `.txt`, `.md`, `.markdown` y `.pdf`.
-- Markdown renderizado, no mostrado como texto crudo.
-- PDF renderizado por páginas con navegación.
-- Restauración automática del último libro.
-- Posición independiente por libro:
-  - offset y contexto para TXT/Markdown;
-  - número de página para PDF.
-- Tamaño de letra configurable para TXT/Markdown.
-- Selección y copia de texto.
-- Backup JSON de posiciones y estados.
-- Cero referencias a traducción en código, interfaz y recursos.
-- APK `BookReader-v1.apk`, paquete `com.ricardo.bookreader`,
-  `versionCode 1` / `versionName v1`.
+- TXT y Markdown se dividen según el tamaño real de la pantalla y de la fuente.
+- PDF muestra la página completa ajustada a pantalla, sin scroll.
+- La posición de lectura se restaura por libro.
+- Las marcas sobreviven al cierre de la app.
+- El modo «solo marcadas» recorre únicamente las páginas señaladas.
+- La exportación genera un PDF compartible; conserva visualmente las páginas PDF y transcribe las páginas de texto.
+- No hay funciones ni cadenas de traducción.
+- Lint sin errores, tests unitarios aprobados y APK v2 firmada.
 
-## Verificación completada
+## Estado
 
-- `lintDebug`: 0 errores.
-- Pruebas unitarias: 3/3 correctas para detección TXT/Markdown/PDF.
-- Compilación `assembleDebug`: correcta.
-- Búsqueda en código, interfaz y recursos:
-  0 referencias a traducción.
-- Paquete `com.ricardo.bookreader`.
-- `versionCode 1` / `versionName v1`.
-- SDK mínimo 24 / objetivo 34.
-- APK alineada y firma v2 válida.
-- SHA-256 APK:
-  `1341f586c78391f118362f70d1285137a149eebce058079b6178295b08a8d206`.
+Completado el 26/07/2026.
+
+- `lintDebug`: 0 errores; 14 avisos informativos de versiones disponibles.
+- Tests unitarios: 6 aprobados, 0 fallos.
+- APK: `BookReader-v2.apk`.
+- Paquete: `com.ricardo.bookreader`.
+- Versión: code 2 / name v2.
+- Firma APK Signature Scheme v2 verificada.
+- SHA-256: `13a5523175abd35e1d1d2567c15774a1ab0ef00c20574b56607b2e6f05e23281`.
+- Auditoría de traducción/vocabulario: 0 coincidencias funcionales.

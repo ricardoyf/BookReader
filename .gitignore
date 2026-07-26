@@ -8,4 +8,4 @@ local.properties
 *.zip
 *.apk
 *.apk.sha256
-!BookReader-v1.apk
+!BookReader-v*.apk

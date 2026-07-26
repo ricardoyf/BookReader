@@ -4,6 +4,8 @@ import android.net.Uri
 import com.ricardo.bookreader.model.FolderEntry
 import com.ricardo.bookreader.model.ReadingPosition
 import com.ricardo.bookreader.model.BookDocument
+import com.ricardo.bookreader.model.PageMark
+import com.ricardo.bookreader.model.ReaderPageSnapshot
 
 data class ReaderUiState(
     val treeUri: Uri? = null,
@@ -30,5 +32,25 @@ data class ReaderUiState(
     val currentChunkIndex: Int = -1,
     val currentChunkStartOffset: Int = 0,
     val currentChunkEndOffset: Int = 0,
-    val lastRangeOffset: Int? = null
+    val lastRangeOffset: Int? = null,
+    val pageMarks: List<PageMark> = emptyList(),
+    val currentPage: ReaderPageSnapshot? = null,
+    val showMarkedOnly: Boolean = false
 )
+
+fun ReaderUiState.currentBookMarks(): List<PageMark> {
+    val uri = selectedFile?.uri?.toString() ?: return emptyList()
+    return pageMarks.filter { it.fileUri == uri }.sortedBy { it.pageNumber }
+}
+
+fun ReaderUiState.isCurrentPageMarked(): Boolean {
+    val page = currentPage ?: return false
+    return currentBookMarks().any { mark ->
+        if (page.isPdf) {
+            mark.pageNumber == page.pageNumber
+        } else {
+            mark.characterOffset in page.startOffset until
+                page.endOffset.coerceAtLeast(page.startOffset + 1)
+        }
+    }
+}

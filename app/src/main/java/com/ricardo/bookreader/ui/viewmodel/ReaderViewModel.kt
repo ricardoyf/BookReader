@@ -11,6 +11,8 @@ import com.ricardo.bookreader.data.BookRepository
 import com.ricardo.bookreader.model.ReadingPosition
 import com.ricardo.bookreader.model.BookDocument
 import com.ricardo.bookreader.model.BookFormat
+import com.ricardo.bookreader.model.PageMark
+import com.ricardo.bookreader.model.ReaderPageSnapshot
 import com.ricardo.bookreader.model.detectBookFormat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,7 +45,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                     isLoading = false,
                     fontSizeSp = saved.fontScaleSp,
                     restoreAvailable = false,
-                    readEntries = saved.readEntries
+                    readEntries = saved.readEntries,
+                    pageMarks = saved.pageMarks
                 )
                 return@launch
             }
@@ -52,7 +55,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                 isLoading = true,
                 errorMessage = null,
                 fontSizeSp = saved.fontScaleSp,
-                readEntries = saved.readEntries
+                readEntries = saved.readEntries,
+                pageMarks = saved.pageMarks
             )
 
             runCatching {
@@ -62,7 +66,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                     isLoading = false,
                     fontSizeSp = saved.fontScaleSp,
                     errorMessage = "No se pudo restaurar la carpeta. Selecciónala de nuevo.",
-                    restoreAvailable = true
+                    restoreAvailable = true,
+                    pageMarks = saved.pageMarks
                 )
             }
         }
@@ -190,6 +195,49 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { prefs.saveFontScale(normalized) }
     }
 
+    fun onVisiblePageChanged(page: ReaderPageSnapshot, renderedText: String = "") {
+        _uiState.value = _uiState.value.copy(currentPage = page)
+        if (page.isPdf) {
+            rememberPdfPage(page.pageNumber - 1)
+        } else if (renderedText.isNotEmpty()) {
+            rememberVisiblePosition(renderedText, page.startOffset, 0)
+        }
+    }
+
+    fun toggleCurrentPageMark() {
+        val current = _uiState.value
+        val file = current.selectedFile ?: return
+        val page = current.currentPage ?: return
+        val existing = current.pageMarks.firstOrNull { mark ->
+            mark.fileUri == file.uri.toString() &&
+                if (page.isPdf) {
+                    mark.isPdf && mark.pageNumber == page.pageNumber
+                } else {
+                    !mark.isPdf && mark.characterOffset in page.startOffset until
+                        page.endOffset.coerceAtLeast(page.startOffset + 1)
+                }
+        }
+        val updated = if (existing != null) {
+            current.pageMarks - existing
+        } else {
+            current.pageMarks + PageMark(
+                fileUri = file.uri.toString(),
+                fileName = file.name,
+                pageNumber = page.pageNumber,
+                characterOffset = page.startOffset,
+                pageText = page.pageText.trim(),
+                isPdf = page.isPdf,
+                createdAt = System.currentTimeMillis()
+            )
+        }
+        _uiState.value = current.copy(pageMarks = updated)
+        viewModelScope.launch { prefs.savePageMarks(updated) }
+    }
+
+    fun toggleMarkedOnly() {
+        _uiState.value = _uiState.value.copy(showMarkedOnly = !_uiState.value.showMarkedOnly)
+    }
+
     fun saveReadingPosition(
         characterOffset: Int,
         sourceText: String,
@@ -266,10 +314,12 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                 val importMessage = if (result.legacyTxtReaderBackup) {
                     "JSON antiguo importado: ${result.readEntries} leídos restaurados. Ese JSON no contiene posiciones."
                 } else {
-                    "Backup importado: ${result.readingPositions} posiciones y ${result.readEntries} leídos restaurados."
+                    "Backup importado: ${result.readingPositions} posiciones, " +
+                        "${result.pageMarks} post-it y ${result.readEntries} leídos restaurados."
                 }
                 _uiState.value = _uiState.value.copy(
                     readEntries = saved.readEntries,
+                    pageMarks = saved.pageMarks,
                     errorMessage = importMessage
                 )
                 refreshFilesKeepingSelection()
@@ -318,7 +368,9 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                     currentChunkIndex = -1,
                     currentChunkStartOffset = 0,
                     currentChunkEndOffset = 0,
-                    lastRangeOffset = null
+                    lastRangeOffset = null,
+                    currentPage = null,
+                    showMarkedOnly = false
                 )
                 prefs.saveCurrentFileUri(file.uri.toString())
                 prefs.saveCurrentFileName(file.name)
@@ -346,7 +398,9 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                         currentChunkIndex = savedPosition?.chunkIndex ?: -1,
                         currentChunkStartOffset = savedPosition?.chunkStartOffset ?: 0,
                         currentChunkEndOffset = savedPosition?.chunkEndOffset ?: 0,
-                        lastRangeOffset = null
+                        lastRangeOffset = null,
+                        currentPage = null,
+                        showMarkedOnly = false
                     )
                     prefs.saveCurrentFileUri(file.uri.toString())
                     prefs.saveCurrentFileName(file.name)
@@ -381,7 +435,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 null
             },
-            readEntries = _uiState.value.readEntries
+            readEntries = _uiState.value.readEntries,
+            pageMarks = _uiState.value.pageMarks
         )
 
         val savedFile = currentFileUri?.let { savedUri ->
@@ -405,13 +460,22 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             .onSuccess { newUri ->
                 val renamedName = documentName(newUri) ?: current.name
                 val replacedReadEntries = updatedReadEntries - current.uri.toString() + newUri.toString() + readNameKey(renamedName)
+                val migratedMarks = _uiState.value.pageMarks.map { mark ->
+                    if (mark.fileUri == current.uri.toString()) {
+                        mark.copy(fileUri = newUri.toString(), fileName = renamedName)
+                    } else {
+                        mark
+                    }
+                }
                 _uiState.value = _uiState.value.copy(
                     selectedFile = current.copy(uri = newUri, name = renamedName, isRead = true),
-                    readEntries = replacedReadEntries
+                    readEntries = replacedReadEntries,
+                    pageMarks = migratedMarks
                 )
                 prefs.saveCurrentFileUri(newUri.toString())
                 prefs.saveCurrentFileName(renamedName)
                 prefs.saveReadEntries(replacedReadEntries)
+                prefs.savePageMarks(migratedMarks)
                 marked = true
             }
             .onFailure {

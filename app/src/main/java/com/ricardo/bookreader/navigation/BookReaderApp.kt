@@ -28,9 +28,11 @@ import com.ricardo.bookreader.ui.screens.ReaderScreen
 import com.ricardo.bookreader.ui.viewmodel.ReaderViewModel
 import com.ricardo.bookreader.ui.viewmodel.ReaderViewModelFactory
 import com.ricardo.bookreader.model.SpeechChunk
+import com.ricardo.bookreader.data.MarkedPagesPdfExporter
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.launch
+import com.ricardo.bookreader.ui.viewmodel.currentBookMarks
 
 @Composable
 fun BookReaderApp() {
@@ -353,13 +355,45 @@ fun BookReaderApp() {
                 },
                 onExportJson = viewModel::buildExportJson,
                 onImportJson = { importBackupLauncher.launch(arrayOf("application/json", "text/*")) },
+                onExportMarkedPages = {
+                    val book = state.selectedFile
+                    val marks = state.currentBookMarks()
+                    if (book != null && marks.isNotEmpty()) {
+                        scope.launch {
+                            MarkedPagesPdfExporter.export(context.applicationContext, book, marks)
+                                .onSuccess { file ->
+                                    val uri = FileProvider.getUriForFile(
+                                        context,
+                                        context.packageName + ".fileprovider",
+                                        file
+                                    )
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "application/pdf"
+                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                        putExtra(
+                                            Intent.EXTRA_SUBJECT,
+                                            "BookReader - páginas marcadas de ${book.name}"
+                                        )
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(
+                                        Intent.createChooser(intent, "Enviar páginas marcadas")
+                                    )
+                                }
+                                .onFailure {
+                                    ttsMessage = "No se pudieron exportar las páginas marcadas."
+                                }
+                        }
+                    }
+                },
+                onTogglePageMark = viewModel::toggleCurrentPageMark,
+                onToggleMarkedOnly = viewModel::toggleMarkedOnly,
                 onOpenLibrary = { navController.navigate(Destination.Library.route) },
                 ttsReady = ttsReady,
                 ttsSpeaking = ttsSpeaking,
                 ttsPaused = ttsPaused,
                 ttsHighlightStart = ttsHighlightStart,
                 ttsHighlightEnd = ttsHighlightEnd,
-                ttsPositionLocked = speechChunks.isNotEmpty() || ttsSpeaking || ttsPaused,
                 speechRate = speechRate,
                 continuousPlayback = continuousPlayback,
                 onStartReading = { text, startOffset -> startReadingText(text, startOffset) },
@@ -374,8 +408,7 @@ fun BookReaderApp() {
                     if (!continuousPlayback) pendingContinuousTargetUri = null
                     ttsMessage = if (continuousPlayback) "Continuo activado" else "Continuo desactivado"
                 },
-                onManualPositionChanged = viewModel::rememberVisiblePosition,
-                onPdfPageChanged = viewModel::rememberPdfPage
+                onVisiblePageChanged = viewModel::onVisiblePageChanged
             )
         }
     }

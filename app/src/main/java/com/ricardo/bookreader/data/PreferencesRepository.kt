@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.ricardo.bookreader.model.ReaderPreferences
 import com.ricardo.bookreader.model.ReadingPosition
+import com.ricardo.bookreader.model.PageMark
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -26,6 +27,7 @@ private val Context.dataStore by preferencesDataStore(name = "book_reader_prefs"
 data class BackupImportResult(
     val readEntries: Int,
     val readingPositions: Int,
+    val pageMarks: Int,
     val legacyTxtReaderBackup: Boolean
 )
 
@@ -38,6 +40,7 @@ class PreferencesRepository(private val context: Context) {
         val FONT_SCALE = floatPreferencesKey("font_scale")
         val READ_ENTRIES = stringSetPreferencesKey("read_entries")
         val READING_POSITIONS = stringPreferencesKey("reading_positions")
+        val PAGE_MARKS = stringPreferencesKey("page_marks")
     }
 
     val preferences: Flow<ReaderPreferences> = context.dataStore.data.map { prefs ->
@@ -47,7 +50,8 @@ class PreferencesRepository(private val context: Context) {
             currentFileUri = prefs[Keys.CURRENT_FILE_URI],
             currentFileName = prefs[Keys.CURRENT_FILE_NAME],
             fontScaleSp = prefs[Keys.FONT_SCALE] ?: 19f,
-            readEntries = prefs[Keys.READ_ENTRIES] ?: emptySet()
+            readEntries = prefs[Keys.READ_ENTRIES] ?: emptySet(),
+            pageMarks = decodePageMarks(prefs[Keys.PAGE_MARKS])
         )
     }
 
@@ -107,6 +111,14 @@ class PreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun savePageMarks(marks: List<PageMark>) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.PAGE_MARKS] = JSONArray().apply {
+                marks.forEach { put(it.toJson()) }
+            }.toString()
+        }
+    }
+
     suspend fun exportBackupJson(): String {
         val prefs = context.dataStore.data.first()
         val positions = decodeReadingPositions(prefs[Keys.READING_POSITIONS])
@@ -121,7 +133,7 @@ class PreferencesRepository(private val context: Context) {
 
         return JSONObject()
             .put("type", "book_reader_backup")
-            .put("version", 1)
+            .put("version", 2)
             .put("exportedAt", isoUtcNow())
             .put("treeUri", prefs[Keys.TREE_URI])
             .put("currentFolderUri", prefs[Keys.CURRENT_FOLDER_URI])
@@ -130,6 +142,9 @@ class PreferencesRepository(private val context: Context) {
             .put("fontScaleSp", prefs[Keys.FONT_SCALE] ?: 19f)
             .put("readEntries", JSONArray(prefs[Keys.READ_ENTRIES]?.toList() ?: emptyList<String>()))
             .put("readingPositions", exportedPositions)
+            .put("pageMarks", JSONArray().apply {
+                decodePageMarks(prefs[Keys.PAGE_MARKS]).forEach { put(it.toJson()) }
+            })
             .toString(2)
     }
 
@@ -139,6 +154,7 @@ class PreferencesRepository(private val context: Context) {
         val legacyReadFiles = backup.optJSONArray("readFiles")
         var importedPositionCount = 0
         var importedReadCount = 0
+        var importedMarkCount = 0
 
         context.dataStore.edit { prefs ->
             val mergedReadEntries = (prefs[Keys.READ_ENTRIES] ?: emptySet()).toMutableSet()
@@ -179,16 +195,49 @@ class PreferencesRepository(private val context: Context) {
                 importedPositionCount += 1
             }
             prefs[Keys.READING_POSITIONS] = currentPositions.toString()
+
+            val currentMarks = decodePageMarks(prefs[Keys.PAGE_MARKS]).toMutableList()
+            backup.optJSONArray("pageMarks")?.let { marks ->
+                for (index in 0 until marks.length()) {
+                    val item = marks.optJSONObject(index) ?: continue
+                    val oldUri = item.optString("fileUri")
+                    val fileName = item.optString("fileName").takeIf { it.isNotBlank() }
+                        ?: fileNameFromUri(oldUri)
+                    val targetUri = currentFileUrisByName[fileName] ?: oldUri
+                    if (targetUri.isBlank()) continue
+                    val imported = item.toPageMark()?.copy(fileUri = targetUri, fileName = fileName)
+                        ?: continue
+                    if (currentMarks.none { it.sameAnchor(imported) }) {
+                        currentMarks += imported
+                        importedMarkCount += 1
+                    }
+                }
+            }
+            prefs[Keys.PAGE_MARKS] = JSONArray().apply {
+                currentMarks.forEach { put(it.toJson()) }
+            }.toString()
         }
         return BackupImportResult(
             readEntries = importedReadCount.coerceAtLeast(0),
             readingPositions = importedPositionCount,
+            pageMarks = importedMarkCount,
             legacyTxtReaderBackup = legacyReadFiles != null && importedPositions.length() == 0
         )
     }
 
     private fun decodeReadingPositions(raw: String?): JSONObject =
         runCatching { if (raw.isNullOrBlank()) JSONObject() else JSONObject(raw) }.getOrDefault(JSONObject())
+
+    private fun decodePageMarks(raw: String?): List<PageMark> {
+        val array = runCatching {
+            if (raw.isNullOrBlank()) JSONArray() else JSONArray(raw)
+        }.getOrDefault(JSONArray())
+        return buildList {
+            for (index in 0 until array.length()) {
+                array.optJSONObject(index)?.toPageMark()?.let(::add)
+            }
+        }
+    }
 
     private fun JSONObject.getReadingPosition(fileUri: String): ReadingPosition? {
         val item = optJSONObject(fileUri) ?: return null
@@ -215,6 +264,35 @@ class PreferencesRepository(private val context: Context) {
             .put("scrollY", scrollY)
             .put("pdfPage", pdfPage)
             .put("updatedAt", updatedAt)
+
+    private fun PageMark.toJson(): JSONObject =
+        JSONObject()
+            .put("fileUri", fileUri)
+            .put("fileName", fileName)
+            .put("pageNumber", pageNumber)
+            .put("characterOffset", characterOffset)
+            .put("pageText", pageText)
+            .put("isPdf", isPdf)
+            .put("createdAt", createdAt)
+
+    private fun JSONObject.toPageMark(): PageMark? {
+        val fileUri = optString("fileUri").takeIf { it.isNotBlank() } ?: return null
+        return PageMark(
+            fileUri = fileUri,
+            fileName = optString("fileName", fileNameFromUri(fileUri)),
+            pageNumber = optInt("pageNumber", 1).coerceAtLeast(1),
+            characterOffset = optInt("characterOffset", 0).coerceAtLeast(0),
+            pageText = optString("pageText", ""),
+            isPdf = optBoolean("isPdf", false),
+            createdAt = optLong("createdAt", System.currentTimeMillis())
+        )
+    }
+
+    private fun PageMark.sameAnchor(other: PageMark): Boolean =
+        fileUri == other.fileUri &&
+            isPdf == other.isPdf &&
+            if (isPdf) pageNumber == other.pageNumber
+            else characterOffset == other.characterOffset
 
     private fun fileNameFromUri(fileUri: String): String {
         val uri = runCatching { Uri.parse(fileUri) }.getOrNull() ?: return fileUri

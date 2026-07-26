@@ -23,7 +23,8 @@ data class ReaderPreferences(
     val currentFileUri: String? = null,
     val currentFileName: String? = null,
     val fontScaleSp: Float = 19f,
-    val readEntries: Set<String> = emptySet()
+    val readEntries: Set<String> = emptySet(),
+    val pageMarks: List<PageMark> = emptyList()
 )
 
 data class ReadingPosition(
@@ -43,4 +44,23 @@ data class SpeechChunk(
     val text: String,
     val startOffset: Int,
     val endOffset: Int
+)
+
+data class ReaderPageSnapshot(
+    val pageNumber: Int = 1,
+    val totalPages: Int = 1,
+    val startOffset: Int = 0,
+    val endOffset: Int = 0,
+    val pageText: String = "",
+    val isPdf: Boolean = false
+)
+
+data class PageMark(
+    val fileUri: String,
+    val fileName: String,
+    val pageNumber: Int,
+    val characterOffset: Int,
+    val pageText: String,
+    val isPdf: Boolean,
+    val createdAt: Long
 )

@@ -111,6 +111,17 @@ class PreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun moveReadingPosition(oldFileUri: String, newFileUri: String) {
+        if (oldFileUri == newFileUri) return
+        context.dataStore.edit { prefs ->
+            val root = decodeReadingPositions(prefs[Keys.READING_POSITIONS])
+            val position = root.optJSONObject(oldFileUri) ?: return@edit
+            root.put(newFileUri, JSONObject(position.toString()))
+            root.remove(oldFileUri)
+            prefs[Keys.READING_POSITIONS] = root.toString()
+        }
+    }
+
     suspend fun savePageMarks(marks: List<PageMark>) {
         context.dataStore.edit { prefs ->
             prefs[Keys.PAGE_MARKS] = JSONArray().apply {

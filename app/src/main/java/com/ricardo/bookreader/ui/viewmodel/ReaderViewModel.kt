@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.text.Normalizer
 
@@ -27,6 +28,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _uiState = MutableStateFlow(ReaderUiState(isLoading = true))
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
+    private var positionSaveJob: Job? = null
 
     init {
         restoreLastState()
@@ -133,30 +135,40 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                     isPdf = format == BookFormat.PDF
                 )
             }
-        openBookDocument(file)
+        viewModelScope.launch {
+            flushCurrentReadingPosition()
+            openBookDocument(file)
+        }
     }
 
     fun openNextFile() {
         viewModelScope.launch {
             val current = _uiState.value
             val nextFile = currentFolderBooks(current).getOrNull(current.selectedFileIndex + 1)
-            val marked = markCurrentAsReadIfNeeded()
+            flushCurrentReadingPosition()
+            val marked = if (isBookComplete(current.currentPage)) {
+                markCurrentAsReadIfNeeded()
+            } else {
+                false
+            }
             if (marked) refreshFilesKeepingSelection()
-            nextFile?.let { openBookDocument(it, restoreSavedPosition = false) }
+            nextFile?.let { openBookDocument(it) }
         }
     }
 
     fun openPreviousFile() {
         viewModelScope.launch {
+            flushCurrentReadingPosition()
             val refreshed = _uiState.value
             val files = currentFolderBooks(refreshed)
             val previousIndex = refreshed.selectedFileIndex - 1
-            if (previousIndex in files.indices) openBookDocument(files[previousIndex], restoreSavedPosition = false)
+            if (previousIndex in files.indices) openBookDocument(files[previousIndex])
         }
     }
 
     fun markCurrentAsRead() {
         viewModelScope.launch {
+            flushCurrentReadingPosition()
             val marked = markCurrentAsReadIfNeeded()
             if (marked) {
                 refreshFilesKeepingSelection()
@@ -269,7 +281,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             lastRangeOffset = rangeOffset,
             restoredReadingPosition = position
         )
-        viewModelScope.launch { prefs.saveReadingPosition(position) }
+        enqueueReadingPositionSave(position)
     }
 
     fun rememberPdfPage(page: Int) {
@@ -290,7 +302,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             currentPdfPage = safePage,
             restoredReadingPosition = position
         )
-        viewModelScope.launch { prefs.saveReadingPosition(position) }
+        enqueueReadingPositionSave(position)
     }
 
     fun rememberVisiblePosition(sourceText: String, characterOffset: Int, scrollY: Int) {
@@ -331,43 +343,68 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun openBookDocument(file: BookDocument, restoreSavedPosition: Boolean = true) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            val allFiles = currentFolderBooks()
-            val index = allFiles.indexOfFirst { it.uri == file.uri }
-            val folderUri = file.parentUri ?: _uiState.value.currentFolderUri
-            val savedPosition = if (restoreSavedPosition) {
-                prefs.getReadingPosition(file.uri.toString())
-            } else {
-                null
-            }
+    private suspend fun openBookDocument(file: BookDocument) {
+        _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+        val allFiles = currentFolderBooks()
+        val index = allFiles.indexOfFirst { it.uri == file.uri }
+        val folderUri = file.parentUri ?: _uiState.value.currentFolderUri
+        val savedPosition = prefs.getReadingPosition(file.uri.toString())
 
-            if (file.isPdf) {
+        if (file.isPdf) {
+            _uiState.value = _uiState.value.copy(
+                selectedFile = file,
+                selectedFileIndex = index,
+                content = "",
+                isMarkdownContent = false,
+                isPdfContent = true,
+                isLoading = false,
+                currentFolderUri = folderUri,
+                currentFolderName = folderUri?.let { documentName(it) }
+                    ?: _uiState.value.currentFolderName,
+                folderEntries = folderUri?.let { bookRepository.getFolderEntries(it) }
+                    ?: _uiState.value.folderEntries,
+                folderStack = if (folderUri != null && folderUri != _uiState.value.treeUri) {
+                    listOf(folderUri)
+                } else {
+                    emptyList()
+                },
+                restoredReadingPosition = savedPosition,
+                currentCharacterOffset = 0,
+                currentScrollY = 0,
+                currentPdfPage = savedPosition?.pdfPage ?: 0,
+                currentChunkIndex = -1,
+                currentChunkStartOffset = 0,
+                currentChunkEndOffset = 0,
+                lastRangeOffset = null,
+                currentPage = null,
+                showMarkedOnly = false
+            )
+            prefs.saveCurrentFileUri(file.uri.toString())
+            prefs.saveCurrentFileName(file.name)
+            prefs.saveCurrentFolderUri(folderUri?.toString())
+            return
+        }
+
+        bookRepository.readText(file.uri)
+            .onSuccess { text ->
                 _uiState.value = _uiState.value.copy(
                     selectedFile = file,
                     selectedFileIndex = index,
-                    content = "",
-                    isMarkdownContent = false,
-                    isPdfContent = true,
+                    content = text,
+                    isMarkdownContent = file.isMarkdown,
+                    isPdfContent = false,
                     isLoading = false,
                     currentFolderUri = folderUri,
-                    currentFolderName = folderUri?.let { documentName(it) }
-                        ?: _uiState.value.currentFolderName,
-                    folderEntries = folderUri?.let { bookRepository.getFolderEntries(it) }
-                        ?: _uiState.value.folderEntries,
-                    folderStack = if (folderUri != null && folderUri != _uiState.value.treeUri) {
-                        listOf(folderUri)
-                    } else {
-                        emptyList()
-                    },
+                    currentFolderName = folderUri?.let { documentName(it) } ?: _uiState.value.currentFolderName,
+                    folderEntries = folderUri?.let { bookRepository.getFolderEntries(it) } ?: _uiState.value.folderEntries,
+                    folderStack = if (folderUri != null && folderUri != _uiState.value.treeUri) listOf(folderUri) else emptyList(),
                     restoredReadingPosition = savedPosition,
-                    currentCharacterOffset = 0,
-                    currentScrollY = 0,
-                    currentPdfPage = savedPosition?.pdfPage ?: 0,
-                    currentChunkIndex = -1,
-                    currentChunkStartOffset = 0,
-                    currentChunkEndOffset = 0,
+                    currentCharacterOffset = savedPosition?.characterOffset ?: 0,
+                    currentScrollY = savedPosition?.scrollY ?: 0,
+                    currentPdfPage = 0,
+                    currentChunkIndex = savedPosition?.chunkIndex ?: -1,
+                    currentChunkStartOffset = savedPosition?.chunkStartOffset ?: 0,
+                    currentChunkEndOffset = savedPosition?.chunkEndOffset ?: 0,
                     lastRangeOffset = null,
                     currentPage = null,
                     showMarkedOnly = false
@@ -375,44 +412,13 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                 prefs.saveCurrentFileUri(file.uri.toString())
                 prefs.saveCurrentFileName(file.name)
                 prefs.saveCurrentFolderUri(folderUri?.toString())
-                return@launch
             }
-
-            bookRepository.readText(file.uri)
-                .onSuccess { text ->
-                    _uiState.value = _uiState.value.copy(
-                        selectedFile = file,
-                        selectedFileIndex = index,
-                        content = text,
-                        isMarkdownContent = file.isMarkdown,
-                        isPdfContent = false,
-                        isLoading = false,
-                        currentFolderUri = folderUri,
-                        currentFolderName = folderUri?.let { documentName(it) } ?: _uiState.value.currentFolderName,
-                        folderEntries = folderUri?.let { bookRepository.getFolderEntries(it) } ?: _uiState.value.folderEntries,
-                        folderStack = if (folderUri != null && folderUri != _uiState.value.treeUri) listOf(folderUri) else emptyList(),
-                        restoredReadingPosition = savedPosition,
-                        currentCharacterOffset = savedPosition?.characterOffset ?: 0,
-                        currentScrollY = savedPosition?.scrollY ?: 0,
-                        currentPdfPage = 0,
-                        currentChunkIndex = savedPosition?.chunkIndex ?: -1,
-                        currentChunkStartOffset = savedPosition?.chunkStartOffset ?: 0,
-                        currentChunkEndOffset = savedPosition?.chunkEndOffset ?: 0,
-                        lastRangeOffset = null,
-                        currentPage = null,
-                        showMarkedOnly = false
-                    )
-                    prefs.saveCurrentFileUri(file.uri.toString())
-                    prefs.saveCurrentFileName(file.name)
-                    prefs.saveCurrentFolderUri(folderUri?.toString())
-                }
-                .onFailure {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = "No se pudo leer el archivo seleccionado."
-                    )
-                }
-        }
+            .onFailure {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    errorMessage = "No se pudo leer el archivo seleccionado."
+                )
+            }
     }
 
     private suspend fun reloadTree(treeUri: Uri, currentFolderUri: Uri?, currentFileUri: Uri?, currentFileName: String? = null) {
@@ -459,6 +465,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         bookRepository.markAsRead(current.uri, current.parentUri)
             .onSuccess { newUri ->
                 val renamedName = documentName(newUri) ?: current.name
+                val migratedPosition = _uiState.value.restoredReadingPosition
+                    ?.copy(fileUri = newUri.toString())
                 val replacedReadEntries = updatedReadEntries - current.uri.toString() + newUri.toString() + readNameKey(renamedName)
                 val migratedMarks = _uiState.value.pageMarks.map { mark ->
                     if (mark.fileUri == current.uri.toString()) {
@@ -470,8 +478,10 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                 _uiState.value = _uiState.value.copy(
                     selectedFile = current.copy(uri = newUri, name = renamedName, isRead = true),
                     readEntries = replacedReadEntries,
-                    pageMarks = migratedMarks
+                    pageMarks = migratedMarks,
+                    restoredReadingPosition = migratedPosition
                 )
+                prefs.moveReadingPosition(current.uri.toString(), newUri.toString())
                 prefs.saveCurrentFileUri(newUri.toString())
                 prefs.saveCurrentFileName(renamedName)
                 prefs.saveReadEntries(replacedReadEntries)
@@ -485,6 +495,19 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                 marked = true
             }
         return marked
+    }
+
+    private fun enqueueReadingPositionSave(position: ReadingPosition) {
+        val previousSave = positionSaveJob
+        positionSaveJob = viewModelScope.launch {
+            previousSave?.join()
+            prefs.saveReadingPosition(position)
+        }
+    }
+
+    private suspend fun flushCurrentReadingPosition() {
+        positionSaveJob?.join()
+        _uiState.value.restoredReadingPosition?.let { prefs.saveReadingPosition(it) }
     }
 
     private fun refreshFilesKeepingSelection(): ReaderUiState {

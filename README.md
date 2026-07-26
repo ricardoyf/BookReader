@@ -1,4 +1,4 @@
-# BookReader v2
+# BookReader v3
 
 Lector Android offline con una experiencia de páginas inspirada en un Kindle.
 
@@ -10,6 +10,8 @@ Lector Android offline con una experiencia de páginas inspirada en un Kindle.
 - Avance y retroceso por botones o gesto horizontal; no se usa scroll para leer.
 - PDF mostrado como página completa ajustada a la pantalla.
 - Memoria independiente de la posición de cada libro.
+- Cambiar al libro anterior o siguiente conserva y restaura la página exacta, aunque el libro esté sin terminar.
+- Un libro solo se marca automáticamente como leído al avanzar desde su última página.
 - Reapertura automática del último libro.
 - Botón post-it para marcar o desmarcar la página actual.
 - Vista «solo páginas marcadas» para repasar los post-it.
@@ -25,8 +27,8 @@ Lector Android offline con una experiencia de páginas inspirada en un Kindle.
 ## Identidad Android
 
 - Paquete: `com.ricardo.bookreader`
-- Version code: `2`
-- Version name: `v2`
+- Version code: `3`
+- Version name: `v3`
 - Android mínimo: API 24
 - Target: API 34
 
@@ -36,4 +38,4 @@ Lector Android offline con una experiencia de páginas inspirada en un Kindle.
 ./gradlew assembleDebug
 ```
 
-El APK de entrega se guarda como `BookReader-v2.apk` en la raíz del proyecto.
+El APK de entrega se guarda como `BookReader-v3.apk` en la raíz del proyecto.

@@ -1,3 +1,9 @@
+<!-- app-release:start -->
+[**Descargar APK v3**](https://github.com/ricardoyf/BookReader/releases/download/v3/BookReader-v3.apk) · [SHA-256](https://github.com/ricardoyf/BookReader/releases/download/v3/BookReader-v3.apk.sha256)
+
+`780c54ebd49cb79080806d38d80fc69810e2da81dde6e36ff8fcf721d02bc529`
+<!-- app-release:end -->
+
 # BookReader v3
 
 Lector Android offline con una experiencia de páginas inspirada en un Kindle.
